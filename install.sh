@@ -57,6 +57,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+RELEASE_TAG=""
 if [[ -z "$RELEASE_BASE_URL" ]]; then
   if [[ -n "$RELEASE_API_URL" ]]; then
     RELEASE_JSON="$TEMP_DIR/latest-release.json"
