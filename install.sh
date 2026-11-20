@@ -64,8 +64,14 @@ if [[ -z "$RELEASE_BASE_URL" ]]; then
     download "$RELEASE_API_URL" "$RELEASE_JSON" || die "failed to query the configured latest-release API"
     RELEASE_TAG="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RELEASE_JSON" | head -n 1)"
   elif command -v curl >/dev/null 2>&1; then
-    LATEST_TARGET_URL="$(curl -fLsS --retry 3 --connect-timeout 15 -o /dev/null -w '%{url_effective}' "$RELEASE_LATEST_URL")" || die "failed to resolve the latest GitHub Release"
-    RELEASE_TAG="${LATEST_TARGET_URL##*/}"
+    if LATEST_TARGET_URL="$(curl -fLsS --retry 3 --connect-timeout 15 -o /dev/null -w '%{url_effective}' "$RELEASE_LATEST_URL")"; then
+      RELEASE_TAG="${LATEST_TARGET_URL##*/}"
+    fi
+    if [[ ! "$RELEASE_TAG" =~ ^v?[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]]; then
+      LATEST_PAGE="$TEMP_DIR/latest-release.html"
+      download "$RELEASE_LATEST_URL" "$LATEST_PAGE" || die "failed to query the latest GitHub Release"
+      RELEASE_TAG="$(grep -Eo '/zhangzhangjun/clp-combination/releases/tag/v?[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?' "$LATEST_PAGE" | head -n 1 | sed 's#^.*/##')"
+    fi
   else
     LATEST_PAGE="$TEMP_DIR/latest-release.html"
     download "$RELEASE_LATEST_URL" "$LATEST_PAGE" || die "failed to query the latest GitHub Release"
