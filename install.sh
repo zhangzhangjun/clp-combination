@@ -260,6 +260,30 @@ if ! awk '
   unset GENERATED_XIANYU_DATA_KEY
   echo "Generated persistent XIANYU_DATA_KEY in $DATA_ENV_FILE"
 fi
+
+# Go 的内存回收参数写入持久化 EnvironmentFile，而不是直接覆盖服务环境。
+# 这样首次安装会得到适合 1~2 GiB 云主机的默认值；升级时如果管理员已经
+# 调整过任一参数，则保留现有值，避免安装脚本覆盖运维配置。
+ensure_env_default() {
+  local env_name="$1"
+  local env_value="$2"
+  if awk -v name="$env_name" '
+    $0 ~ "^[[:space:]]*" name "[[:space:]]*=" {
+      value = $0
+      sub(/^[^=]*=/, "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (value != "" && value != "\"\"" && value != "\047\047" && value !~ /^#/) configured = 1
+    }
+    END { exit !configured }
+  ' "$DATA_ENV_FILE"; then
+    return 0
+  fi
+  printf '%s=%s\n' "$env_name" "$env_value" >> "$DATA_ENV_FILE"
+  echo "Configured $env_name=$env_value in $DATA_ENV_FILE"
+}
+
+ensure_env_default "GOGC" "80"
+ensure_env_default "GOMEMLIMIT" "1400MiB"
 chmod 600 "$DATA_ENV_FILE"
 
 chown -R "$SERVICE_USER" "$INSTALL_DIR"
