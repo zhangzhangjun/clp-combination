@@ -23,9 +23,11 @@ and prints them once. Save both.
 To build the downloadable CentOS-compatible release on Windows, run
 `buliu\build-release.bat` (defaults to amd64; pass `arm64` for ARM servers).
 The stable archives and checksums are written to `dist/`, while versioned
-archives are attached to the GitHub Release. Configure a GitHub token with
-repository contents and release write access when prompted by the publisher.
-Verify that the raw `install.sh` URL returns HTTP 200 before deployment.
+archives are attached to GitHub Releases. The Windows BAT also attempts to
+publish the same release and installer files to Gitee after GitHub succeeds;
+Gitee mirror failures are reported without blocking the GitHub release.
+Configure write access for both hosts before publishing, and verify that the
+raw GitHub `install.sh` URL returns HTTP 200 before deployment.
 
 The server uses the embedded model catalog by default. The SQLite request-log
 index keeps at most 100 detailed rows by default; older rows remain represented
