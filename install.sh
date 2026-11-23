@@ -49,11 +49,26 @@ download() {
 
 TEMP_DIR="$(mktemp -d)"
 INSTALL_BINARY_TMP=""
+STATIC_STAGE=""
+STATIC_BACKUP=""
+STATIC_HAD_OLD=0
+STATIC_SWAP_PENDING=0
 cleanup() {
+  local exit_status=$?
+  if [[ "$STATIC_SWAP_PENDING" == 1 ]]; then
+    rm -rf -- "$INSTALL_DIR/static"
+    if [[ "$STATIC_HAD_OLD" == 1 && -d "$STATIC_BACKUP" ]]; then
+      mv -- "$STATIC_BACKUP" "$INSTALL_DIR/static" || true
+    fi
+  fi
+  if [[ -n "$STATIC_STAGE" ]]; then
+    rm -rf -- "$STATIC_STAGE"
+  fi
   if [[ -n "$INSTALL_BINARY_TMP" ]]; then
     rm -f -- "$INSTALL_BINARY_TMP"
   fi
   rm -rf -- "$TEMP_DIR"
+  return "$exit_status"
 }
 trap cleanup EXIT
 
@@ -127,9 +142,29 @@ mkdir -p "$INSTALL_DIR"
 shopt -s dotglob nullglob
 for package_entry in "$PACKAGE_DIR"/*; do
   [[ "${package_entry##*/}" == "cli-proxy-api" ]] && continue
+  [[ "${package_entry##*/}" == "static" ]] && continue
   cp -a -- "$package_entry" "$INSTALL_DIR/"
 done
 shopt -u dotglob nullglob
+
+# Replace the whole published frontend tree. Copying it into the existing
+# directory leaves obsolete content-hashed files behind, which can make an
+# upgraded install serve a mixture of frontend releases.
+[[ ! -L "$INSTALL_DIR/static" ]] || die "refusing to replace a symbolic-link static directory: $INSTALL_DIR/static"
+if [[ -e "$INSTALL_DIR/static" && ! -d "$INSTALL_DIR/static" ]]; then
+  die "static path exists and is not a directory: $INSTALL_DIR/static"
+fi
+STATIC_STAGE="$INSTALL_DIR/.static-install.new.$$"
+STATIC_BACKUP="$INSTALL_DIR/.static-install.previous.$$"
+[[ ! -e "$STATIC_STAGE" && ! -e "$STATIC_BACKUP" ]] || die "temporary static install path already exists"
+cp -a -- "$PACKAGE_DIR/static" "$STATIC_STAGE"
+if [[ -d "$INSTALL_DIR/static" ]]; then
+  mv -- "$INSTALL_DIR/static" "$STATIC_BACKUP"
+  STATIC_HAD_OLD=1
+fi
+STATIC_SWAP_PENDING=1
+mv -- "$STATIC_STAGE" "$INSTALL_DIR/static"
+STATIC_STAGE=""
 mkdir -p "$INSTALL_DIR/auths" "$INSTALL_DIR/logs"
 
 # Migrate legacy JSON auth files without following or relocating symlinks.
@@ -377,6 +412,7 @@ write_root_status() {
   mv -f -- "$tmp" "$ROOT_STATUS"
 }
 rollback() {
+  local reason="$1"
   "$SYSTEMCTL_PATH" stop "$SERVICE_NAME" >/dev/null 2>&1 || true
   if [[ -f "$INSTALL_DIR/.cli-proxy-api.previous" && ! -L "$INSTALL_DIR/.cli-proxy-api.previous" ]]; then
     mv -f -- "$INSTALL_DIR/.cli-proxy-api.previous" "$INSTALL_DIR/cli-proxy-api"
@@ -393,24 +429,36 @@ rollback() {
   normalize_static_permissions
   "$SYSTEMCTL_PATH" reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
   "$SYSTEMCTL_PATH" start "$SERVICE_NAME" >/dev/null 2>&1 || true
-  write_root_status "failed" "" "service restart failed; previous files were restored" || true
+  write_root_status "failed" "" "$reason; previous files were restored" || true
 }
 PREVIOUS_RESTARTS="$("$SYSTEMCTL_PATH" show --property=NRestarts "$SERVICE_NAME" 2>/dev/null | sed -n 's/^NRestarts=//p' | head -n 1)"
 PREVIOUS_PID="$("$SYSTEMCTL_PATH" show --property=MainPID "$SERVICE_NAME" 2>/dev/null | sed -n 's/^MainPID=//p' | head -n 1)"
 if ! "$SYSTEMCTL_PATH" restart "$SERVICE_NAME"; then
-  rollback
+  rollback "systemctl restart failed; inspect journalctl -u cliproxyapi-restart.service and journalctl -u cliproxyapi"
   exit 1
 fi
 sleep 15
 MAIN_PID="$("$SYSTEMCTL_PATH" show --property=MainPID "$SERVICE_NAME" 2>/dev/null | sed -n 's/^MainPID=//p' | head -n 1)"
 CURRENT_RESTARTS="$("$SYSTEMCTL_PATH" show --property=NRestarts "$SERVICE_NAME" 2>/dev/null | sed -n 's/^NRestarts=//p' | head -n 1)"
-if ! "$SYSTEMCTL_PATH" is-active --quiet "$SERVICE_NAME" || [[ ! "$MAIN_PID" =~ ^[1-9][0-9]*$ ]] || [[ "$MAIN_PID" == "$PREVIOUS_PID" ]] || [[ "$PREVIOUS_RESTARTS" =~ ^[0-9]+$ && "$CURRENT_RESTARTS" =~ ^[0-9]+$ && "$CURRENT_RESTARTS" != "$PREVIOUS_RESTARTS" ]]; then
-  rollback
+if ! "$SYSTEMCTL_PATH" is-active --quiet "$SERVICE_NAME"; then
+  rollback "service is inactive after restart; inspect journalctl -u cliproxyapi"
+  exit 1
+fi
+if [[ ! "$MAIN_PID" =~ ^[1-9][0-9]*$ ]]; then
+  rollback "service has no running main process after restart; inspect journalctl -u cliproxyapi"
+  exit 1
+fi
+if [[ "$MAIN_PID" == "$PREVIOUS_PID" ]]; then
+  rollback "service process did not change after restart; inspect journalctl -u cliproxyapi-restart.service"
+  exit 1
+fi
+if [[ "$PREVIOUS_RESTARTS" =~ ^[0-9]+$ && "$CURRENT_RESTARTS" =~ ^[0-9]+$ && "$CURRENT_RESTARTS" != "$PREVIOUS_RESTARTS" ]]; then
+  rollback "service restarted again during the health-check window; inspect journalctl -u cliproxyapi"
   exit 1
 fi
 CURRENT_VERSION="$(tr -d '\r\n' < "$INSTALL_DIR/VERSION.txt")"
 if ! write_root_status "success" "$CURRENT_VERSION" ""; then
-  rollback
+  rollback "failed to save successful restart status; previous files were restored"
   exit 1
 fi
 rm -f -- "$INSTALL_DIR/.cli-proxy-api.previous" "$INSTALL_DIR/.VERSION.txt.previous"
@@ -471,6 +519,11 @@ systemctl is-active --quiet "$SERVICE_NAME" || {
   systemctl --no-pager --full status "$SERVICE_NAME" || true
   die "service did not become active; inspect with: journalctl -u $SERVICE_NAME -n 100"
 }
+
+STATIC_SWAP_PENDING=0
+if [[ "$STATIC_HAD_OLD" == 1 ]]; then
+  rm -rf -- "$STATIC_BACKUP"
+fi
 
 echo "CLIProxyAPI is running as a systemd service: $SERVICE_NAME"
 echo "Install directory: $INSTALL_DIR"
