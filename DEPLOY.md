@@ -29,6 +29,19 @@ Gitee mirror failures are reported without blocking the GitHub release.
 Configure write access for both hosts before publishing, and verify that the
 raw GitHub `install.sh` URL returns HTTP 200 before deployment.
 
+The ai-chat H3 30-second workflow uses `ffmpeg.wasm` in the requesting user's browser
+to extract the continuity frame and join the two clips; this mode does not need
+server-side `ffmpeg` or `ffprobe`. The user must keep the page open until processing
+and upload finish. The browser downloads an approximately 32 MiB WebAssembly core
+on first use and uses the user's memory, CPU, and network bandwidth. The final MP4
+is uploaded to the server for playback and retention.
+
+The direct server-processing H3 workflow still requires `ffmpeg` and `ffprobe`
+(the 6/10/15-second H3 routes do not). Place both executables in the application's
+sibling `tools/` directory, beside the server binary, or on `PATH`, with MP4 and
+JPEG support. The browser bundle currently uses `@ffmpeg/core` (GPL-2.0-or-later);
+review redistribution and license compatibility before publishing the frontend.
+
 The server uses the embedded model catalog by default. The SQLite request-log
 index keeps at most 100 detailed rows by default; older rows remain represented
 in aggregate usage tables. Change `request-log-max-records` in `config.yaml` to
